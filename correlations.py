@@ -120,6 +120,8 @@ if args["backup"]:
 B_values = np.array([ args["ref_B"] + i*args["delta_B"] 
                     for i in range(-args["n"], args["n"]+1) ])
 correlation_table = np.zeros( (B_values.size, modes) )
+with open("max_mode.log", "w") as log:
+    log.write("# Bfield file_mode ref_mode\n")
 
 #for i,B in enumerate(B_values):
 for B, corr in zip(B_values, correlation_table):
@@ -164,9 +166,9 @@ for B, corr in zip(B_values, correlation_table):
         current_output = glob.glob(cwd+"/Q_states.*.coeff.*.purewavefunction.ascii")
         if fix_flag: print "Repeating calc for B={} due to bug!".format(B)
         fix_flag += 1
-        
 
 
+    allowed_modes = range(int(modes))
     for f in ascii_files:
         print "Reading {FILE}...".format(FILE=f)
         mode = int(ascii_pattern.search(f).group(1))
@@ -174,7 +176,29 @@ for B, corr in zip(B_values, correlation_table):
         psi_B = np.loadtxt(f, usecols=(1,), dtype=complex,
                         converters={1: convert_to_complex})
         #correlation_table[i,mode] = np.absolute(np.vdot(psi_ref[mode], psi_B)) #* dx**2
-        corr[mode] = np.absolute(np.vdot(psi_ref[mode], psi_B)) #* dx**2
+        
+        # Since the ordering of the output can't be controlled well, the 
+        # reference psi and the current psi get misaligned, that is the mode
+        # number of the ascii file is different from the one in psi_ref.
+        # Therefore the correlation with every reference psi is calculated and
+        # the maximum value is used as the correlation. Once a mode from psi_ref
+        # has been used for a correlation, it can't be used for the other ascii
+        # files to prevent using the same reference mode twice.
+
+        # old
+        #corr[mode] = np.absolute(np.vdot(psi_ref[mode], psi_B)) #* dx**2
+
+        tmp = np.absolute(np.sum(np.conjugate(psi_ref[allowed_modes]) * psi_B, axis=1)) # * dx**2
+        imax = tmp.argmax()
+        use_mode = allowed_modes[imax]
+        corr[use_mode] = tmp[imax]
+        allowed_modes.remove(use_mode)
+
+        if use_mode != mode:
+            with open("max_mode.log", "a") as log:
+                log.write("{BFIELD} {FILEMODE} {REFMODE}\n".format(
+                    BFIELD=B, FILEMODE=mode, REFMODE=use_mode) )
+
 
     if args["backup"]:
         print "Renaming images..."
