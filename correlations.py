@@ -5,6 +5,7 @@ import os
 import glob
 import re
 import Q_Matrix
+import T_Matrix
 
 from rename_images import rename_images
 
@@ -63,11 +64,13 @@ with open("parameters.xml") as params_file:
     pphw = get_parameter_value(params, "points_per_halfwave")
     modes = get_parameter_value(params, "modes")
     dx = 1.0/(modes*pphw+1)
+    r_ny = pphw*modes + 1
     print """
     modes = {MODES}
     pphw = {PPHW}
     dx = {DX}
-    """.format(MODES=modes, PPHW=pphw, DX=dx)
+    r_ny = {R_NY}
+    """.format(MODES=modes, PPHW=pphw, DX=dx, R_NY=r_ny)
 
 
 # Calculate wavefunction for reference B
@@ -85,33 +88,43 @@ with open("parameters.xml", "w") as params_file:
     """.format(BFIELD=args["ref_B"], DERIVATIVE_STEPSIZE=dB)
 
 run_code("input.xml", opt=args["multi_core"])
+
 Q_B = Q_Matrix.Time_Delay_Matrix(derivative_stepsize=dB)
 Q_B.write_eigenstates()
 Q_B.write_eigenvalues()
 run_code("output.xml", opt=args["multi_core"])
 
-cwd = os.getcwd()
-ascii_files = glob.glob(cwd+"/Q_states.*.coeff.*.purewavefunction.ascii")
+TT = T_Matrix.T_Matrix()
+TT.write_eigenstates()
+TT.write_eigenvalues()
+run_code("T_output.xml", opt=args["multi_core"])
+
+ascii_files = glob.glob("[Q,T]_states.*.coeff.*.purewavefunction.ascii")
 ascii_files.sort()
-ascii_regex = r'Q_states\.(\d{,4})\.coeff\.(\d{,4})\.purewavefunction\.ascii'
+ascii_regex = r'[Q,T]_states\.(\d{,4})\.coeff\.(\d{,4})\.purewavefunction\.ascii'
 ascii_pattern = re.compile(ascii_regex)
 
 # Get file length to allocate psi_ref
 with open(ascii_files[0]) as f:
     ascii_f_len = sum(1 for line in f)
     psi_ref = np.zeros( (int(modes),ascii_f_len), dtype=complex ) 
+    chi_ref = np.zeros_like(psi_ref)
 
 for f in ascii_files:
     print "Reading {FILE}...".format(FILE=f)
     mode = int(ascii_pattern.search(f).group(1))
-    psi_ref[mode] = np.loadtxt(f, usecols=(1,), dtype=complex,
-                    converters={1: convert_to_complex})
+    if f.startswith("Q"):
+        psi_ref[mode] = np.loadtxt(f, usecols=(1,), dtype=complex,
+                        converters={1: convert_to_complex})
+    elif f.startswith("T"):
+        chi_ref[mode] = np.loadtxt(f, usecols=(1,), dtype=complex,
+                        converters={1: convert_to_complex})
 
 if args["backup"]:
     print "Renaming images..."
     rename_images()
     print "Backing up files..."
-    backup_files(glob_arg="Q_states", prefix="B_ref_{}_".format(args["ref_B"]))
+    backup_files(glob_arg="[Q,T]_states", prefix="B_ref_{}_".format(args["ref_B"]))
 
 
 # Scan over all B values
@@ -120,11 +133,12 @@ if args["backup"]:
 B_values = np.array([ args["ref_B"] + i*args["delta_B"] 
                     for i in range(-args["n"], args["n"]+1) ])
 correlation_table = np.zeros( (B_values.size, modes) )
+correlation_table_chi = np.zeros_like(correlation_table)
 with open("max_mode.log", "w") as log:
-    log.write("# Bfield file_mode ref_mode\n")
+    log.write("# state Bfield file_mode ref_mode\n")
 
 #for i,B in enumerate(B_values):
-for B, corr in zip(B_values, correlation_table):
+for B, corr, corr_chi in zip(B_values, correlation_table, correlation_table_chi):
     print "Starting calculation for B = {}".format(B)
 
     with open("parameters.xml", "w") as params_file:
@@ -142,8 +156,10 @@ for B, corr in zip(B_values, correlation_table):
 #FIX THIS because vdot will flatten axis!
         # unbedingt noch dx**2 einbauen, vorerst weggelassen, um Vergleichbarkeit mit notebook zu erleichtern
         tmp = np.absolute(np.sum(psi_ref.conjugate() * psi_ref, axis=1)) # * dx**2
+        tmp_chi = np.absolute(np.sum(chi_ref.conjugate() * chi_ref, axis=1)) # * dx**2
         #np.copyto(correlation_table[i], tmp)
         np.copyto(corr, tmp)
+        np.copyto(corr_chi, tmp_chi)
         continue
 
     
@@ -154,21 +170,31 @@ for B, corr in zip(B_values, correlation_table):
     current_output = []
     fix_flag = 0
     while set(current_output) != set(ascii_files):
-        run_code("input.xml", opt=args["multi_core"])
-        Q_B = Q_Matrix.Time_Delay_Matrix(derivative_stepsize=dB)
-        Q_B.write_eigenstates()
-        Q_B.write_eigenvalues()
+
         # Remove ascii_files from previous calculation, as solve_xml_mumps 
         # sometimes omits the output from one mode, in which case the old ascii
         # file would be used again.
         remove_files(ascii_files)
+
+        run_code("input.xml", opt=args["multi_core"])
+
+        Q_B = Q_Matrix.Time_Delay_Matrix(derivative_stepsize=dB)
+        Q_B.write_eigenstates()
+        Q_B.write_eigenvalues()
         run_code("output.xml", opt=args["multi_core"])
-        current_output = glob.glob(cwd+"/Q_states.*.coeff.*.purewavefunction.ascii")
+
+        TT = T_Matrix.T_Matrix()
+        TT.write_eigenstates()
+        TT.write_eigenvalues()
+        run_code("T_output.xml", opt=args["multi_core"])
+
+        current_output = glob.glob("[Q,T]_states.*.coeff.*.purewavefunction.ascii")
         if fix_flag: print "Repeating calc for B={} due to bug!".format(B)
         fix_flag += 1
 
 
     allowed_modes = range(int(modes))
+    allowed_modes_chi = range(int(modes))
     for f in ascii_files:
         print "Reading {FILE}...".format(FILE=f)
         mode = int(ascii_pattern.search(f).group(1))
@@ -188,32 +214,44 @@ for B, corr in zip(B_values, correlation_table):
         # old
         #corr[mode] = np.absolute(np.vdot(psi_ref[mode], psi_B)) #* dx**2
 
-        tmp = np.absolute(np.sum(np.conjugate(psi_ref[allowed_modes]) * psi_B, axis=1)) # * dx**2
-        imax = tmp.argmax()
-        use_mode = allowed_modes[imax]
-        corr[use_mode] = tmp[imax]
-        allowed_modes.remove(use_mode)
+        if f.startswith("Q"):
+            tmp = np.absolute(np.sum(np.conjugate(psi_ref[allowed_modes]) * psi_B, axis=1)) # * dx**2
+            imax = tmp.argmax()
+            use_mode = allowed_modes[imax]
+            corr[use_mode] = tmp[imax]
+            allowed_modes.remove(use_mode)
+        elif f.startswith("T"):
+            tmp = np.absolute(np.sum(np.conjugate(chi_ref[allowed_modes_chi]) * psi_B, axis=1)) # * dx**2
+            imax = tmp.argmax()
+            use_mode = allowed_modes_chi[imax]
+            corr_chi[use_mode] = tmp[imax]
+            allowed_modes_chi.remove(use_mode)
 
         if use_mode != mode:
             with open("max_mode.log", "a") as log:
-                log.write("{BFIELD} {FILEMODE} {REFMODE}\n".format(
-                    BFIELD=B, FILEMODE=mode, REFMODE=use_mode) )
+                log.write("{STATE} {BFIELD} {FILEMODE} {REFMODE}\n".format(
+                    STATE=f[0], BFIELD=B, FILEMODE=mode, REFMODE=use_mode) )
 
 
     if args["backup"]:
         print "Renaming images..."
         rename_images()
         print "Backing up files..."
-        backup_files( glob_arg="Q_states", prefix="B_{}_".format(B) )
+        backup_files( glob_arg="[Q,T]_states", prefix="B_{}_".format(B) )
 
 
 # Save results to file:
 # --------------------
-with open("correlation.dat", "a") as ofile:
-    print "Saving results to {}".format(ofile)
+with open("correlation.dat", "a") as Qfile, open("correlation_T.dat", "a") as Tfile:
     HEADER = "Bfield" + "  mode {}  "*int(modes)
     HEADER = HEADER.format(*range(int(modes)))
-    np.savetxt( ofile, 
+    print "Saving results to {}".format(Qfile)
+    np.savetxt( Qfile, 
                 np.c_[B_values, correlation_table],
+                header = HEADER,
+                fmt = "%.2f" + " %.8f"*int(modes) )
+    print "Saving results to {}".format(Tfile)
+    np.savetxt( Tfile, 
+                np.c_[B_values, correlation_table_chi],
                 header = HEADER,
                 fmt = "%.2f" + " %.8f"*int(modes) )
