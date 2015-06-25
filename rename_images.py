@@ -7,6 +7,7 @@ def rename_images():
     """
     import glob
     import os
+    import re
     import sys
     import shutil
 
@@ -26,10 +27,22 @@ def rename_images():
         sys.exit(10)
     
     # if the jobname contains a '.' then this will fail!
-    start = pics[0].find(".") + 1
-    end = pics[0].find(".", start)
-    jobname = pics[0][start:end] 
-    print "JOBNAME {}".format(jobname)
+   # start = pics[0].find(".") + 1
+   # end = pics[0].find(".", start)
+   # jobname = pics[0][start:end] 
+   # print "JOBNAME {}".format(jobname)
+
+    regex = r"""
+            {PREFIX}\.
+            (?P<jobname>\w+)\.
+            (?P<id>(\d+\.)?\d+)\.
+            (?P<case>\w+)\.
+            \d+\.
+            {MARKER}\.
+            (?P<suffix>\S+)
+            """.format(PREFIX=pic_prefix, MARKER=pic_rename_marker)
+
+    pattern = re.compile(regex, re.VERBOSE)
 
     # can be used to revert changes
     pics_new = []
@@ -40,28 +53,24 @@ def rename_images():
     print "Renaming following file(s) from OLD to NEW:"
 
     for pic in pics:
+        
+        match = pattern.search(pic)
 
         if pic.endswith("jpg"):
-            pic_suffix = "jpg"
             cnt_jpg += 1
         elif pic.endswith("average_over-y.dat"):
-            pic_suffix = "average_over_y.dat"
             cnt_dat += 1
         else:
             print "Error while reading files, unknown file type included"
             sys.exit(1)
 
-        if "streu" in pic:
-            pic_ID = pic[end+1: end+10]
-            pic_case = "streu"
-            
-        elif "coeff" in pic:
-            pic_ID = pic[end+1: end+5]
-            pic_case = "coeff"
 
         new_name =  "{PREFIX}.{JOBNAME}.{CASE}.{ID}.{SUFFIX}".format(
-                PREFIX = pic_prefix, JOBNAME = jobname, CASE = pic_case, 
-                ID = pic_ID, SUFFIX = pic_suffix)
+                    PREFIX = pic_prefix, 
+                    JOBNAME = match.group("jobname"), 
+                    CASE = match.group("case"), 
+                    ID = match.group("id"), 
+                    SUFFIX = match.group("suffix"))
 
         print "{OLD}  ->  {NEW}".format(OLD=pic, NEW=new_name)
         shutil.move(pic, new_name) 
