@@ -53,6 +53,12 @@ parser.add_argument('-b', '--backup',
                     help="""Prevent overriding of data, by backing up all files
                     to directory bak/ with the current B-value prepended to 
                     their filename""")
+parser.add_argument('-g', '--full-grid',
+                    action="store_true",
+                    default=False,
+                    help="""Calculate the correlations for entire cavity (e.g.
+                    use all grid points) instead of the output interface (e.g. 
+                    only last y-slice)""")
 
 args=vars(parser.parse_args())
 
@@ -64,7 +70,7 @@ with open("parameters.xml") as params_file:
     pphw = get_parameter_value(params, "points_per_halfwave")
     modes = get_parameter_value(params, "modes")
     dx = 1.0/(modes*pphw+1)
-    r_ny = pphw*modes + 1
+    r_ny = int(pphw*modes + 1)
     print """
     modes = {MODES}
     pphw = {PPHW}
@@ -106,25 +112,41 @@ ascii_pattern = re.compile(ascii_regex)
 
 # Get file length to allocate psi_ref
 with open(ascii_files[0]) as f:
-    ascii_f_len = sum(1 for line in f)
-    psi_ref = np.zeros( (int(modes),ascii_f_len), dtype=complex ) 
+    ascii_f_len = int(sum(1 for line in f))
+
+    if args["full_grid"]:
+        grid = ascii_f_len
+    else:
+        grid = r_ny
+
+    grid_delta = ascii_f_len - grid
+    psi_ref = np.zeros( (int(modes), grid), dtype=complex ) 
     chi_ref = np.zeros_like(psi_ref)
+
+    #template = np.zeros( (int(modes), grid), dtype=complex ) 
+    #psi_ref = {"Q": np.zeros_like(template), "T": np.zeros_like(template)}
+
 
 for f in ascii_files:
     print "Reading {FILE}...".format(FILE=f)
     mode = int(ascii_pattern.search(f).group(1))
+
     if f.startswith("Q"):
-        psi_ref[mode] = np.loadtxt(f, usecols=(1,), dtype=complex,
-                        converters={1: convert_to_complex})
+        psi_ref[mode] = np.loadtxt(f, usecols=(1,), skiprows=grid_delta, 
+                        dtype=complex, converters={1: convert_to_complex})
     elif f.startswith("T"):
-        chi_ref[mode] = np.loadtxt(f, usecols=(1,), dtype=complex,
-                        converters={1: convert_to_complex})
+        chi_ref[mode] = np.loadtxt(f, usecols=(1,), skiprows=grid_delta,
+                        dtype=complex, converters={1: convert_to_complex})
+
+    #psi_ref[f[0]][mode] = np.loadtxt(f, usecols=(1,), skiprows=grid_delta, 
+    #                        dtype=complex, converters={1: convert_to_complex})
 
 if args["backup"]:
     print "Renaming images..."
     rename_images()
     print "Backing up files..."
-    backup_files(glob_arg="[Q,T]_states", prefix="B_ref_{}_".format(args["ref_B"]))
+    backup_files(glob_arg="[Q,T]_states", 
+                 prefix="B_ref_{}_".format(args["ref_B"]))
 
 
 # Scan over all B values
@@ -153,13 +175,20 @@ for B, corr, corr_chi in zip(B_values, correlation_table, correlation_table_chi)
         
     if B == args["ref_B"]:
         print "REFERENZ"
-#FIX THIS because vdot will flatten axis!
-        # unbedingt noch dx**2 einbauen, vorerst weggelassen, um Vergleichbarkeit mit notebook zu erleichtern
-        tmp = np.absolute(np.sum(psi_ref.conjugate() * psi_ref, axis=1)) # * dx**2
-        tmp_chi = np.absolute(np.sum(chi_ref.conjugate() * chi_ref, axis=1)) # * dx**2
-        #np.copyto(correlation_table[i], tmp)
+
+        # unbedingt noch dx einbauen, vorerst weggelassen, um Vergleichbarkeit mit notebook zu erleichtern
+        # tmp = np.absolute(np.sum(psi_ref.conjugate() * psi_ref, axis=1)) # * dx
+        # tmp_chi = np.absolute(np.sum(chi_ref.conjugate() * chi_ref, axis=1)) # * dx
+        # np.copyto(corr, tmp)
+        # np.copyto(corr_chi, tmp_chi)
+
+        # use different correlation (cos alpha) which will give 1.0 for reference
+        # additionally all dx will drop out
+        tmp = np.ones_like(corr)
         np.copyto(corr, tmp)
-        np.copyto(corr_chi, tmp_chi)
+        np.copyto(corr_chi, tmp)
+
+        #np.copyto(correlation_table[i], tmp)
         continue
 
     
@@ -199,7 +228,7 @@ for B, corr, corr_chi in zip(B_values, correlation_table, correlation_table_chi)
         print "Reading {FILE}...".format(FILE=f)
         mode = int(ascii_pattern.search(f).group(1))
         psi_B = np.zeros_like(psi_ref[0])
-        psi_B = np.loadtxt(f, usecols=(1,), dtype=complex,
+        psi_B = np.loadtxt(f, usecols=(1,), dtype=complex, skiprows=grid_delta,
                         converters={1: convert_to_complex})
         #correlation_table[i,mode] = np.absolute(np.vdot(psi_ref[mode], psi_B)) #* dx**2
         
@@ -215,16 +244,32 @@ for B, corr, corr_chi in zip(B_values, correlation_table, correlation_table_chi)
         #corr[mode] = np.absolute(np.vdot(psi_ref[mode], psi_B)) #* dx**2
 
         if f.startswith("Q"):
-            tmp = np.absolute(np.sum(np.conjugate(psi_ref[allowed_modes]) * psi_B, axis=1)) # * dx**2
-            imax = tmp.argmax()
+            bra_ket = np.absolute(np.sum(
+                        np.conjugate(psi_ref[allowed_modes]) * psi_B, axis=1
+                      ))
+            ref_norm = np.sqrt(np.absolute(np.sum(
+                        np.conjugate(psi_ref[allowed_modes]) * psi_ref[allowed_modes], axis=1
+                       )))
+            current_norm = np.sqrt(np.absolute(
+                            np.sum(np.conjugate(psi_B) * psi_B)
+                           ))
+            cos_alpha = bra_ket / (ref_norm * current_norm)
+            imax = cos_alpha.argmax()
             use_mode = allowed_modes[imax]
-            corr[use_mode] = tmp[imax]
+            corr[use_mode] = cos_alpha[imax]
             allowed_modes.remove(use_mode)
         elif f.startswith("T"):
-            tmp = np.absolute(np.sum(np.conjugate(chi_ref[allowed_modes_chi]) * psi_B, axis=1)) # * dx**2
-            imax = tmp.argmax()
+            bra_ket = np.absolute(np.sum(
+                        np.conjugate(chi_ref[allowed_modes_chi]) * psi_B, axis=1
+                      ))
+            ref_norm = np.sqrt(np.absolute(np.sum(
+                        np.conjugate(chi_ref[allowed_modes_chi]) * chi_ref[allowed_modes_chi], axis=1
+                       )))
+            current_norm = np.sqrt(np.absolute(np.sum(np.conjugate(psi_B) * psi_B)))
+            cos_alpha = bra_ket / (ref_norm * current_norm)
+            imax = cos_alpha.argmax()
             use_mode = allowed_modes_chi[imax]
-            corr_chi[use_mode] = tmp[imax]
+            corr_chi[use_mode] = cos_alpha[imax]
             allowed_modes_chi.remove(use_mode)
 
         if use_mode != mode:
@@ -255,3 +300,19 @@ with open("correlation.dat", "a") as Qfile, open("correlation_T.dat", "a") as Tf
                 np.c_[B_values, correlation_table_chi],
                 header = HEADER,
                 fmt = "%.2f" + " %.8f"*int(modes) )
+
+
+# Document settings used in calculation:
+# ------------------------------------
+with open("correlation.doc", "w") as docfile:
+    doc = """# Settings used by correlation.py
+    reference B: {ref_B}
+    delta B: {delta_B}
+    n: {n}
+    mutlti core: {multi_core}
+    backup: {backup}
+    full grid: {full_grid}
+    """.format(**args)
+    docfile.write(doc)
+
+
