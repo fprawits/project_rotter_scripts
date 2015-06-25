@@ -1,0 +1,134 @@
+<?xml version="1.0"?>
+<object type="Parameters" name="Eingabe">
+    <object type="Parameters" name="Abmessung">
+        <param name="modes"></param>
+        <param name="points_per_halfwave"></param>
+        <param name="do_single_slices"></param>
+        <param name="do_picture_slices"> 1 </param>
+
+        <param name="W"></param>  
+        <param name="L"></param>
+        <param name="lead_width"> $W </param>
+        <param name="kF"> $modes * $pi / $lead_width </param>
+        <param name="lead_length"> 1.0 * $W </param>
+        <param name="nyout"> $points_per_halfwave*$modes </param>
+        <param name="dy"> $W/($nyout+1) </param>
+        <param name="dx"> $dy </param>
+        <param name="pi"> 3.141592653589793 </param>
+        <param name="r_ny"> $nyout </param>
+        <param name="r_nx"> $L/$dx </param>
+
+        <param name="N_file"></param>
+        <param name="rdm_boundary"></param>
+
+        <param name="pics_min"></param>
+        <param name="pics_step"></param>
+        <param name="pics_N"></param>
+    </object>
+
+    <param name="file">step_boundary</param>
+    <param name="srand">2344195.0</param>
+
+  <!--splitter-->
+
+    <!-- image -->
+    <object type="Image" name="image">
+        <param name="write_potential">1</param>
+        <param name="write_geometry">1</param>
+        <param name="zoom">1.0</param>
+        <param name="prepend_zero">0</param>
+
+        <object type="jpg_image" name="processor_0">
+            <object type="default_palette" name="palette">
+                <import>Abmessung</import>
+                <param name="scale">$L/($dx*$dy)</param>
+            </object>
+        </object>
+        
+        <object type="average_image" name="processor_1"></object>
+    </object>
+
+    <object type="Block" name="geometry">
+        <object type="Tight_Binding" name="H">
+            <import>Abmessung</import>
+            <param name="ny"> $r_ny </param>
+        </object>
+        <!-- border hamiltonian -->
+        <object type="Border_Hamiltonian" name="H_cut">
+            <!-- lower boundary -->
+            <object type="modify_vector" name="lower">
+                <object type="input_vector" name="data">
+                    <import>Abmessung</import>
+                    <param name="N">$N_file</param>
+                    <param name="file">#rdm_boundary</param>
+                    <param name="format">%*lf %lf</param>
+                </object>
+                <!--<param name="output">lower.dat</param>-->
+                <import>Abmessung</import>
+                <param name="f(x)">x/$dy</param>
+                <param name="i(x)">x*$dy/$L*$N_file</param>
+            </object>
+            <!-- upper boundary -->
+            <object type="modify_vector" name="upper">
+                <object type="input_vector" name="data">
+                    <import>Abmessung</import>
+                    <param name="N">$N_file</param>
+                    <param name="file">#rdm_boundary</param>
+                    <param name="format">%*lf %lf</param>
+                </object>
+                <!--<param name="output">upper.dat</param>-->
+                <import>Abmessung</import>
+                <param name="f(x)">0.0</param>
+                <param name="i(x)">x*$dy/$L*$N_file</param>
+            </object>
+
+            <insert name="sub_H">H</insert>
+        </object>
+        <object type="Rectangle" name="rect_0">
+            <import>Abmessung</import>
+            <param name="nx">$r_nx</param>
+            <insert name="H">H_cut</insert>
+        </object>
+    </object>
+
+  <object type="Parameters" name="template">
+    <import>Abmessung</import>
+
+    <param name="EF">$kF*$kF / 2.</param>
+
+    <param name="imode_min">0</param>
+    <param name="imode_step">1</param>
+    <param name="imode_N">floor($modes)</param>
+
+    <insert name="left_lead">H</insert>
+    <insert name="right_lead">H</insert>
+
+    <insert name="image">image</insert>
+    <insert name="geometry">geometry</insert>
+
+  </object>
+
+    <object type="Streuproblem" name="job">
+        <import>template</import>    
+
+        <object type="Interface" name="left_interface">
+            <param name="ist_L">0</param>
+            <param name="ist_R">0</param>
+            <insert name="HI">H</insert>
+        </object>
+  
+        <object type="Interface" name="right_interface">
+            <import>Abmessung</import>
+            <param name="ist_L">0</param>
+            <param name="ist_R">0</param>
+            <insert name="HI">H</insert>
+        </object>
+      
+    <!-- write complex transmission/reflection coefficients -->
+    <!--<object type="Full_ascii" name="writer_0"></object>-->
+    <!-- write total transmission/reflection probabilities -->
+        <object type="S_Total" name="writer_0"></object>
+    <!--- output full S-matrix -->
+        <object type="streuproblem_post_printSmatrices" name="postprocessor"></object>
+    </object>
+</object>
