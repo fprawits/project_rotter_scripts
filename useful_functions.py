@@ -103,25 +103,31 @@ def get_parameter_value(text, param):
     return value
 
 
-def run_code(in_file, opt=1):
+def run_code(in_file, opt=1, dev=False):
     """Start the calculation via solve_xml_mumps"""
 
     #import os
     #import subprocess
+
+    if dev:
+        mumps = "solve_xml_mumps_dev"
+    else:
+        mumps = "solve_xml_mumps"
 
     if os.environ.get('TMPDIR') and os.environ.get('NSLOTS'):
         print "running code on cluster..."
         print "$TMPDIR", os.environ.get('TMPDIR')
         print "$NSLOTS", os.environ.get('NSLOTS')
         cmd = ("mpirun -machinefile {TMPDIR}/machines -np {NSLOTS} "
-               "solve_xml_mumps -i {INPUT}").format(INPUT=in_file, **os.environ)
+               "{MUMPS} -i {INPUT}").format(INPUT=in_file, MUMPS=mumps, **os.environ)
     else:
         if opt == 1:
             print "running code locally..."
-            cmd = "solve_xml_mumps -i {INPUT}".format(INPUT=in_file)
+            cmd = "{MUMPS} -i {INPUT}".format(MUMPS=mumps, INPUT=in_file)
         elif opt > 1 and opt < 5:
             print "running code locally using {} cores...".format(opt)
-            cmd = ("mpirun -np {} solve_xml_mumps -i {}").format(opt, in_file)
+            cmd = ("mpirun -np {OPT} {MUMPS} -i {INPUT}").format(
+                    OPT=opt, MUMPS=mumps, INPUT=in_file)
 
     subprocess.call(cmd.split())
 
